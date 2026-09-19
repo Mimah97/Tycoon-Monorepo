@@ -70,6 +70,26 @@ gh pr create \
 
 ---
 
+## Analytics
+
+Analytics is configured via the `NEXT_PUBLIC_ANALYTICS_PROVIDERS` environment variable. It accepts a comma-separated list of provider names.
+
+Allowed providers:
+
+- `google-analytics`
+- `plausible`
+- `posthog`
+
+An empty value disables analytics. Unknown provider names cause the build/test to fail so typos are caught early.
+
+Production environment:
+
+```bash
+NEXT_PUBLIC_ANALYTICS_PROVIDERS=plausible
+```
+
+---
+
 ## What's Implemented
 
 ✅ **Idempotency Service** — claim/complete/fail key lifecycle  
