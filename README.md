@@ -1,5 +1,9 @@
 # TYNS Monorepo
 
+## Getting Started
+
+Bring the stack up with `docker compose up`, then confirm the shop-api is healthy by calling `GET /health` (for example, `curl http://localhost:3000/health`). If that endpoint responds successfully, the service is ready for local development.
+
 ## ⚠️ Setup Required
 
 The `shop-api` folder has a nested duplicate (`shop-api/shop-api/`) from a failed copy operation.
