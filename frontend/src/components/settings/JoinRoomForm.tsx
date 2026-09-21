@@ -20,7 +20,7 @@ import {
 } from "@/lib/join-room/security";
 import { getLastJoinCode, saveLastJoinCode } from "@/lib/join-room/storage";
 import { apiClient } from "@/lib/api/client";
-import type { GameResponse } from "@/lib/api/types/dto";
+import type { GamePlayerResponse, GameResponse } from "@/lib/api/types/dto";
 import { useJoinRoomTelemetry } from "@/hooks/useJoinRoomTelemetry";
 
 function parseZodErrors(error: ZodError): FieldErrors {
@@ -169,10 +169,20 @@ export default function JoinRoomForm({
           }, REQUEST_TIMEOUT_MS);
         });
 
+        // Resolve the 6-char room code to a numeric game id first: the live
+        // Nest join route is POST /games/:id/join (numeric id), not a code.
+        const game = await Promise.race([
+          apiClient.get<GameResponse>(
+            `/games/code/${encodeURIComponent(result.data.roomCode)}`,
+            { signal: abortControllerRef.current.signal }
+          ),
+          timeoutPromise,
+        ]);
+
         // Race between actual request and timeout
-        const response = await Promise.race([
-          apiClient.post<GameResponse>(
-            `/games/${encodeURIComponent(result.data.roomCode)}/join`,
+        await Promise.race([
+          apiClient.post<GamePlayerResponse>(
+            `/games/${game.id}/join`,
             {},
             { signal: abortControllerRef.current.signal }
           ),

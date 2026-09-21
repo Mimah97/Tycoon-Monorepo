@@ -8,6 +8,7 @@ import {
 import { Logger, OnModuleInit } from '@nestjs/common';
 import { JwtService } from '@nestjs/jwt';
 import { Server, Socket } from 'socket.io';
+import { getWsCorsConfig } from '../../../config/ws.config';
 import {
   PerksBoostsEvents,
   PerkBoostEvent,
@@ -16,9 +17,7 @@ import type { JwtPayload } from '../../auth/interfaces/jwt-payload.interface';
 
 @WebSocketGateway({
   namespace: 'boosts',
-  cors: {
-    origin: '*',
-  },
+  cors: getWsCorsConfig(),
 })
 export class PerkBoostGateway
   implements

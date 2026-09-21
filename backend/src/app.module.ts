@@ -13,6 +13,8 @@ import { databaseConfig } from './config/database.config';
 import { gameConfig } from './config/game.config';
 import { jwtConfig } from './config/jwt.config';
 import { redisConfig } from './config/redis.config';
+import { wsConfig } from './config/ws.config';
+import { emailConfig } from './config/email.config';
 import { nearConfig } from './config/near.config';
 import { CommonModule, HttpExceptionFilter, AppThrottlerGuard } from './common';
 import { SuspensionCheckMiddleware } from './common/middleware/suspension-check.middleware';
@@ -48,6 +50,7 @@ import { PrivacyModule } from './modules/privacy/privacy.module';
 import { NearModule } from './modules/near/near.module';
 import { LedgerReconciliationModule } from './modules/ledger-reconciliation/ledger-reconciliation.module';
 import { NotificationsModule } from './modules/fetch-notification/notifications.module';
+import { UploadsModule } from './modules/uploads/uploads.module';
 
 @Module({
   imports: [
@@ -61,6 +64,8 @@ import { NotificationsModule } from './modules/fetch-notification/notifications.
         jwtConfig,
         redisConfig,
         uploadConfig,
+        wsConfig,
+        emailConfig,
         nearConfig,
       ],
       envFilePath: '.env',
@@ -131,6 +136,7 @@ import { NotificationsModule } from './modules/fetch-notification/notifications.
     LedgerReconciliationModule,
     NearModule,
     NotificationsModule,
+    UploadsModule,
   ],
   controllers: [AppController],
   providers: [

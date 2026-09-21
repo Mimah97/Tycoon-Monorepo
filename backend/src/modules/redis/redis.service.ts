@@ -471,6 +471,68 @@ export class RedisService {
     }
   }
 
+  /**
+   * Get the current version of a cache namespace.
+   * Used for versioned caching: include version in cache key so that
+   * when version increments, old cache entries are effectively invalidated.
+   *
+   * @param namespace Cache namespace (e.g., 'shop:catalog')
+   * @returns Current version number, or 0 if not yet initialized
+   */
+  async getCacheVersion(namespace: string): Promise<number> {
+    const endTimer = this.redisOperationDuration.startTimer({
+      operation: 'get_cache_version',
+    });
+    try {
+      const key = this.buildKey(`cache-version:${namespace}`);
+      const version = await this.redis.get(key);
+      this.redisOperationsTotal.inc({ operation: 'get_cache_version' });
+      return version ? parseInt(version, 10) : 0;
+    } catch (error: any) {
+      this.redisErrorsTotal.inc({ operation: 'get_cache_version' });
+      this.logger.error(
+        `getCacheVersion error for ${namespace}: ${error.message}`,
+        'RedisService',
+      );
+      return 0; // Graceful degradation: treat as unversioned
+    } finally {
+      endTimer();
+    }
+  }
+
+  /**
+   * Increment the cache version for a namespace.
+   * Callers should invoke this when cache-invalidating mutations occur,
+   * and include the returned version in generated cache keys.
+   *
+   * @param namespace Cache namespace (e.g., 'shop:catalog')
+   * @returns New version number
+   */
+  async incrementCacheVersion(namespace: string): Promise<number> {
+    const endTimer = this.redisOperationDuration.startTimer({
+      operation: 'increment_cache_version',
+    });
+    try {
+      const key = this.buildKey(`cache-version:${namespace}`);
+      const newVersion = await this.redis.incr(key);
+      this.redisOperationsTotal.inc({ operation: 'increment_cache_version' });
+      this.logger.debug(
+        `Incremented cache version for ${namespace} to ${newVersion}`,
+        'RedisService',
+      );
+      return newVersion;
+    } catch (error: any) {
+      this.redisErrorsTotal.inc({ operation: 'increment_cache_version' });
+      this.logger.error(
+        `incrementCacheVersion error for ${namespace}: ${error.message}`,
+        'RedisService',
+      );
+      throw error;
+    } finally {
+      endTimer();
+    }
+  }
+
   /** Gracefully close the raw ioredis connection. Called during shutdown. */
   async quit(): Promise<void> {
     this.logger.log('Closing Redis connection', 'RedisService');

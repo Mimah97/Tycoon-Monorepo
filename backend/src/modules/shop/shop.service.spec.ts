@@ -13,6 +13,7 @@ import {
 import { NotFoundException, BadRequestException } from '@nestjs/common';
 import { RedisService } from '../redis/redis.service';
 import { PaginationService } from '../../common/services/pagination.service';
+import { NotificationsService } from '../fetch-notification/notifications.service';
 
 describe('ShopService', () => {
   let service: ShopService;
@@ -80,6 +81,7 @@ describe('ShopService', () => {
           useValue: mockRedisService,
         },
         PaginationService,
+        { provide: NotificationsService, useValue: { create: jest.fn() } },
       ],
     }).compile();
 

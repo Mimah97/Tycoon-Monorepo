@@ -10,6 +10,7 @@ import { GiftsService } from '../gifts/gifts.service';
 import { RedisService } from '../redis/redis.service';
 import { PaginationService } from '../../common/services/pagination.service';
 import { repositoryMockFactory } from '../../../test/mocks/database.mock';
+import { NotificationsService } from '../fetch-notification/notifications.service';
 
 const mockShopItem: Partial<ShopItem> = {
   id: 1,
@@ -57,6 +58,9 @@ describe('ShopService – purchaseAndGift atomicity (#1294)', () => {
   const mockGiftsService = {};
   const mockRedisService = { delByPattern: jest.fn() };
   const mockPaginationService = { paginate: jest.fn() };
+  const mockNotificationsService = {
+    create: jest.fn().mockResolvedValue({ id: 'n1' }),
+  };
 
   beforeEach(async () => {
     mockDataSource = { createQueryRunner: jest.fn() };
@@ -71,6 +75,7 @@ describe('ShopService – purchaseAndGift atomicity (#1294)', () => {
         { provide: DataSource, useValue: mockDataSource },
         { provide: RedisService, useValue: mockRedisService },
         { provide: PaginationService, useValue: mockPaginationService },
+        { provide: NotificationsService, useValue: mockNotificationsService },
       ],
     }).compile();
 
@@ -96,6 +101,9 @@ describe('ShopService – purchaseAndGift atomicity (#1294)', () => {
     expect(qr.commitTransaction).toHaveBeenCalledTimes(1);
     expect(qr.rollbackTransaction).not.toHaveBeenCalled();
     expect(qr.release).toHaveBeenCalled();
+    expect(mockNotificationsService.create).toHaveBeenCalledWith(
+      expect.objectContaining({ userId: '2' }),
+    );
   });
 
   it('sets correct price fields on the purchase record', async () => {
@@ -109,6 +117,21 @@ describe('ShopService – purchaseAndGift atomicity (#1294)', () => {
     expect(purchaseData.discount_amount).toBe('0.00');
     expect(purchaseData.final_price).toBe('9.99');
     expect(purchaseData.status).toBe('completed');
+  });
+
+  it('keeps the committed gift when notification fails', async () => {
+    const qr = makePurchaseQr({});
+    mockDataSource.createQueryRunner.mockReturnValue(qr);
+    mockNotificationsService.create.mockRejectedValueOnce(new Error('offline'));
+
+    await expect(
+      service.purchaseAndGift(1, {
+        shop_item_id: 1,
+        receiver_id: 2,
+      }),
+    ).resolves.toBeDefined();
+    expect(qr.commitTransaction).toHaveBeenCalled();
+    expect(qr.rollbackTransaction).not.toHaveBeenCalled();
   });
 
   it('rolls back when gift save fails (atomicity)', async () => {

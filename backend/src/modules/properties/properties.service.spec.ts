@@ -278,10 +278,12 @@ describe('PropertiesService', () => {
     });
 
     it('should support partial updates (only one field)', async () => {
+      const updatedAt = new Date('2026-08-25T08:00:00Z');
       mockRepository.findOne.mockResolvedValue(mockProperty);
       mockRepository.save.mockResolvedValue({
         ...mockProperty,
         cost_of_house: 300,
+        updated_at: updatedAt,
       });
 
       const result = await service.updateRentStructure(1, {
@@ -289,6 +291,7 @@ describe('PropertiesService', () => {
       });
 
       expect(result.cost_of_house).toBe(300);
+      expect(result.updated_at).toBe(updatedAt);
       // Other fields should remain unchanged
       expect(result.rent_site_only).toBe(mockProperty.rent_site_only);
     });
