@@ -21,6 +21,16 @@ import { RedisService } from '../redis/redis.service';
 import { secureRandomHex } from '../../common/crypto-secure-random';
 import { PaginationService, PaginatedResponse } from '../../common';
 import { MAX_BULK_UPDATE_ITEMS } from './dto/bulk-update-shop-items.dto';
+import { NotificationsService } from '../fetch-notification/notifications.service';
+import { NotificationType } from '../fetch-notification/entities/notification.entity';
+import { Counter, register } from 'prom-client';
+
+const giftsNotifiedTotal =
+  (register.getSingleMetric('gifts_notified_total') as Counter<string>) ??
+  new Counter({
+    name: 'gifts_notified_total',
+    help: 'Gift receiver notifications created successfully',
+  });
 
 /** @deprecated Use PaginatedResponse<ShopItem> from common instead. */
 export type PaginatedShopItems = PaginatedResponse<ShopItem>;
@@ -39,6 +49,7 @@ export class ShopService {
     private readonly dataSource: DataSource,
     private readonly redisService: RedisService,
     private readonly paginationService: PaginationService,
+    private readonly notificationsService: NotificationsService,
   ) {}
 
   /**
@@ -240,8 +251,18 @@ export class ShopService {
         `purchaseAndGift successful: purchase ${savedPurchase.id}, gift ${savedGift.id}`,
       );
 
-      // 9. TODO: Notify receiver (implement notification service)
-      // await this.notificationService.notifyGiftReceived(receiver_id, savedGift);
+      try {
+        const notification = await this.notificationsService.create({
+          userId: receiver_id.toString(),
+          type: NotificationType.GIFT_RECEIVED,
+          title: 'Gift received',
+          content: `Sender ${senderId} sent ${quantity} × item ${shop_item_id} (${shopItem.name}); gift ${savedGift.id}.`,
+        });
+        if (notification) giftsNotifiedTotal.inc();
+        else this.logger.warn(`Gift ${savedGift.id} committed without notification`);
+      } catch (error) {
+        this.logger.warn(`Gift ${savedGift.id} committed; notification failed: ${error.message}`);
+      }
 
       return {
         purchase: savedPurchase,
@@ -337,20 +358,25 @@ export class ShopService {
   }
 
   /**
-   * Invalidate shop caches
+   * Invalidate shop caches via version bumping.
+   * Instead of deleting cache entries directly, we increment the shop:catalog version,
+   * causing the CacheInterceptor to generate new cache keys on subsequent GET requests.
+   * This avoids broad Redis KEYS operations that can block large instances.
    */
   private async invalidateCache(id?: number): Promise<void> {
     this.logger.debug(`Invalidating shop cache${id ? ` for item ${id}` : ''}`);
-    // Invalidate the list cache
-    await this.redisService.delByPattern('tycoon:shop:items:*');
+    // Bump the shop catalog cache version — this makes all old cache entries miss naturally
+    await this.redisService.incrementCacheVersion('shop:catalog');
 
-    // If a specific ID is provided, invalidate its detail cache
+    // If a specific ID is provided, also delete its detail cache if applicable
     if (id) {
-      await this.redisService.delByPattern(`tycoon:shop:item:items:${id}:*`);
-      // Note: AdvancedCacheInterceptor uses url segments, so shop/items/1 becomes shop:items:1
-      // but my keyPrefix was 'shop:item'. Let's check the logic.
-      // Url /api/v1/shop/items/1 -> segments: shop, items, 1 -> tycoon:shop:item:shop:items:1:public:{}
-      // Wait, I should probably standardize the keyPrefix in controllers.
+      await this.redisService.delByPattern(
+        `tycoon:shop:item:items:${id}:*`,
+      ).catch((err) =>
+        this.logger.warn(
+          `Failed to delete item detail cache for ${id}: ${err.message}`,
+        ),
+      );
     }
   }
 }

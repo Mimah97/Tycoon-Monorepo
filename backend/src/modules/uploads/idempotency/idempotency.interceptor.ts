@@ -14,14 +14,14 @@ import {
   IDEMPOTENCY_KEY_OPTIONS,
   IdempotencyOptions,
 } from './idempotency.constants';
-import { IdempotencyService } from './idempotency.service';
-import type { CapturedHttpResponse } from './idempotency.service';
+import { IdempotencyHelper } from '@/common/idempotency';
 
 @Injectable()
 export class IdempotencyInterceptor implements NestInterceptor {
   constructor(
     private readonly reflector: Reflector,
     private readonly idempotencyService: IdempotencyService,
+    private readonly idempotencyHelper: IdempotencyHelper,
   ) {}
 
   async intercept(
@@ -41,11 +41,11 @@ export class IdempotencyInterceptor implements NestInterceptor {
       return next.handle();
     }
 
-    // Check if this request has been processed before
-    const existingRecord = await this.idempotencyService.checkIdempotency(
-      request,
-      options,
-    );
+    // Generate idempotency key using uploads-specific logic
+    const idempotencyKey = this.idempotencyService.generateKey(request, options);
+
+    // Check if this request has been processed before using shared helper
+    const existingRecord = await this.idempotencyHelper.get(idempotencyKey);
 
     if (existingRecord) {
       if (existingRecord.status === 'in_flight') {
@@ -55,75 +55,52 @@ export class IdempotencyInterceptor implements NestInterceptor {
         });
       }
 
-      // Validate request integrity
-      const isValid = this.idempotencyService.validateRequestIntegrity(
-        request,
-        existingRecord,
-        options,
-      );
-
-      if (!isValid) {
-        throw new ConflictException({
-          error: 'IDEMPOTENCY_MISMATCH',
-          message:
-            'Request content differs from original request with same idempotency key',
-        });
-      }
-
       // Return cached response
-      if (existingRecord.response) {
-        Object.entries(existingRecord.response.headers).forEach(
-          ([key, value]) => {
-            if (!key.toLowerCase().startsWith('x-')) {
-              response.set(key, value);
-            }
-          },
-        );
+      if (existingRecord.status === 'complete' && existingRecord.response) {
+        const cachedResp = existingRecord.response as any;
+        if (cachedResp.headers) {
+          Object.entries(cachedResp.headers).forEach(
+            ([key, value]) => {
+              if (!key.toLowerCase().startsWith('x-')) {
+                response.set(key, value);
+              }
+            },
+          );
+        }
 
         response.set('X-Idempotent-Replayed', 'true');
-        response.status(existingRecord.response.statusCode);
+        response.status(cachedResp.statusCode || HttpStatus.OK);
 
         return new Observable((subscriber) => {
-          subscriber.next(existingRecord.response?.body ?? null);
+          subscriber.next(cachedResp.body ?? null);
           subscriber.complete();
         });
       }
     }
 
-    // Mark as in-progress
-    await this.idempotencyService.markInFlight(request, options);
+    // Claim the key using shared helper
+    const claimed = await this.idempotencyHelper.claim(idempotencyKey, options);
+    if (!claimed) {
+      throw new ConflictException({
+        error: 'IDEMPOTENCY_IN_PROGRESS',
+        message: 'Request is currently being processed',
+      });
+    }
 
     return next.handle().pipe(
       tap(async (data) => {
         const statusCode = response.statusCode || HttpStatus.OK;
-        const captured: CapturedHttpResponse = {
+        const cached = {
           statusCode,
-          getHeaders: () => response.getHeaders(),
+          headers: response.getHeaders() as Record<string, string>,
           body: data,
         };
-        await this.idempotencyService.storeResponse(
-          request,
-          captured,
-          options,
-        );
+        await this.idempotencyHelper.complete(idempotencyKey, cached, options);
         response.set('X-Idempotent', 'true');
       }),
       catchError(async (error) => {
-        const statusCode = error.status || HttpStatus.INTERNAL_SERVER_ERROR;
-        const capturedErr: CapturedHttpResponse = {
-          statusCode,
-          getHeaders: () => response.getHeaders(),
-          body: {
-            error: error.response?.error || 'INTERNAL_ERROR',
-            message: error.message,
-            timestamp: new Date().toISOString(),
-          },
-        };
-        await this.idempotencyService.storeResponse(
-          request,
-          capturedErr,
-          options,
-        );
+        // Fail the claim to allow retries
+        await this.idempotencyHelper.fail(idempotencyKey);
         response.set('X-Idempotent', 'true');
         return throwError(() => error);
       }),

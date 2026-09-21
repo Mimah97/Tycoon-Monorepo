@@ -16,13 +16,21 @@ The backend uses two primary guards for admin access control:
 **Controller**: `AdminAnalyticsController`  
 **Guards**: `JwtAuthGuard`, `AdminGuard`
 
-| HTTP Method | Path | Purpose | Guard Used |
-|-------------|------|---------|------------|
-| GET | `/admin/analytics/dashboard` | Get dashboard analytics overview | AdminGuard |
-| GET | `/admin/analytics/users/total` | Get total users count | AdminGuard |
-| GET | `/admin/analytics/users/active` | Get active users count | AdminGuard |
-| GET | `/admin/analytics/games/total` | Get total games count | AdminGuard |
-| GET | `/admin/analytics/games/players/total` | Get total game players count | AdminGuard |
+| HTTP Method | Path | Purpose | Guard Used | Rate Limit |
+|-------------|------|---------|------------|------------|
+| GET | `/admin/analytics/dashboard` | Get dashboard analytics overview | AdminGuard | 5 req/min |
+| GET | `/admin/analytics/shop` | Get shop sales & conversion analytics | AdminGuard | 5 req/min |
+| GET | `/admin/analytics/users/total` | Get total users count | AdminGuard | 20 req/min |
+| GET | `/admin/analytics/users/active` | Get active users count | AdminGuard | 20 req/min |
+| GET | `/admin/analytics/games/total` | Get total games count | AdminGuard | 20 req/min |
+| GET | `/admin/analytics/games/players/total` | Get total game players count | AdminGuard | 20 req/min |
+
+**Rate Limiting Policy**:
+- **Expensive aggregations** (dashboard, shop): 5 requests per minute — Postgres aggregation queries are resource-intensive
+- **Simple count queries** (users/games): 20 requests per minute — Direct count() operations with lighter index scans
+- Global default: 100 requests per minute
+- Health check endpoints (`/health/*`) remain unthrottled
+- Exceeding limits returns 429 Too Many Requests
 
 ---
 
@@ -108,6 +116,12 @@ The backend uses two primary guards for admin access control:
 | PATCH | `/admin/waitlist/:id` | Update a waitlist entry | AdminGuard |
 | DELETE | `/admin/waitlist/:id` | Soft delete a waitlist entry | AdminGuard |
 | DELETE | `/admin/waitlist/:id/permanent` | Permanently delete a waitlist entry | AdminGuard |
+
+**Bulk Import Limits** (`POST /admin/waitlist/bulk-import`):
+- **Maximum file size**: 10 MB (exceeding returns HTTP 413 Payload Too Large)
+- **Maximum rows**: 10,000 data rows (exceeding returns HTTP 400 Bad Request)
+- Limits are enforced early in the streaming pipeline before database processing to prevent OOM or DoS attacks
+- Error responses include the specific limit exceeded and its configured value
 
 ---
 

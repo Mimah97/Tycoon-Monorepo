@@ -24,15 +24,21 @@ import { AuthObservabilityService } from './auth-observability.service';
     JwtModule.registerAsync({
       imports: [ConfigModule],
       inject: [ConfigService],
-      useFactory: (configService: ConfigService) => ({
-        secret: configService.get<string>('jwt.secret') || 'default-secret',
-        signOptions: {
-          expiresIn: configService.get<number>('jwt.expiresIn') || 900,
-        },
-        verifyOptions: {
-          clockTolerance: configService.get<number>('jwt.clockTolerance') || 60,
-        },
-      }),
+      useFactory: (configService: ConfigService) => {
+        const secret = configService.get<string>('jwt.secret');
+        if (!secret) {
+          throw new Error('JWT_SECRET must be set in environment variables');
+        }
+        return {
+          secret,
+          signOptions: {
+            expiresIn: configService.get<number>('jwt.expiresIn') || 900,
+          },
+          verifyOptions: {
+            clockTolerance: configService.get<number>('jwt.clockTolerance') || 60,
+          },
+        };
+      },
     }),
   ],
   controllers: [AuthController, AdminAuthController],

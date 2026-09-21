@@ -3,7 +3,7 @@ import Link from "next/link";
 import Image from "next/image";
 import { FiFacebook, FiGithub } from "react-icons/fi";
 import { RiTwitterXFill } from "react-icons/ri";
-import { RxDiscordLogo } from "react-icons/rx";
+import { PiTelegramLogoLight } from "react-icons/pi";
 
 const Footer = () => {
   return (
@@ -55,9 +55,7 @@ const Footer = () => {
             className="text-[#F0F7F7] hover:text-[#00F0FF] transition-colors duration-300 ease-in-out text-[20px]"
             aria-label="Telegram"
           >
-            {/* Note: react-icons doesn't have a Telegram icon in the free set, so keeping Discord as placeholder */}
-            {/* If you install react-icons/tg or use a custom SVG, replace RxDiscordLogo with the correct icon */}
-            <RxDiscordLogo />
+            <PiTelegramLogoLight />
           </Link>
         </div>
       </div>

@@ -139,7 +139,7 @@ export class PropertiesService {
       rent_four_houses: updatedProperty.rent_four_houses,
       rent_hotel: updatedProperty.rent_hotel,
       cost_of_house: updatedProperty.cost_of_house,
-      updated_at: new Date(), // TODO: Add UpdateDateColumn to entity
+      updated_at: updatedProperty.updated_at,
     };
   }
 
@@ -167,7 +167,7 @@ export class PropertiesService {
       rent_four_houses: property.rent_four_houses,
       rent_hotel: property.rent_hotel,
       cost_of_house: property.cost_of_house,
-      updated_at: new Date(), // TODO: Add UpdateDateColumn to entity
+      updated_at: property.updated_at,
     };
   }
 
