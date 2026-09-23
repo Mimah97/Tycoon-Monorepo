@@ -16,13 +16,21 @@ The backend uses two primary guards for admin access control:
 **Controller**: `AdminAnalyticsController`  
 **Guards**: `JwtAuthGuard`, `AdminGuard`
 
-| HTTP Method | Path | Purpose | Guard Used |
-|-------------|------|---------|------------|
-| GET | `/admin/analytics/dashboard` | Get dashboard analytics overview | AdminGuard |
-| GET | `/admin/analytics/users/total` | Get total users count | AdminGuard |
-| GET | `/admin/analytics/users/active` | Get active users count | AdminGuard |
-| GET | `/admin/analytics/games/total` | Get total games count | AdminGuard |
-| GET | `/admin/analytics/games/players/total` | Get total game players count | AdminGuard |
+| HTTP Method | Path | Purpose | Guard Used | Rate Limit |
+|-------------|------|---------|------------|------------|
+| GET | `/admin/analytics/dashboard` | Get dashboard analytics overview | AdminGuard | 5 req/min |
+| GET | `/admin/analytics/shop` | Get shop sales & conversion analytics | AdminGuard | 5 req/min |
+| GET | `/admin/analytics/users/total` | Get total users count | AdminGuard | 20 req/min |
+| GET | `/admin/analytics/users/active` | Get active users count | AdminGuard | 20 req/min |
+| GET | `/admin/analytics/games/total` | Get total games count | AdminGuard | 20 req/min |
+| GET | `/admin/analytics/games/players/total` | Get total game players count | AdminGuard | 20 req/min |
+
+**Rate Limiting Policy**:
+- **Expensive aggregations** (dashboard, shop): 5 requests per minute — Postgres aggregation queries are resource-intensive
+- **Simple count queries** (users/games): 20 requests per minute — Direct count() operations with lighter index scans
+- Global default: 100 requests per minute
+- Health check endpoints (`/health/*`) remain unthrottled
+- Exceeding limits returns 429 Too Many Requests
 
 ---
 
@@ -39,7 +47,40 @@ The backend uses two primary guards for admin access control:
 
 ---
 
-### 3. Users Module
+### 3. Admin Ledger Module
+
+**Base Path**: `/admin/ledger`  
+**Controller**: `AdminLedgerController`  
+**Guards**: `JwtAuthGuard`, `AdminGuard` (class-level)
+
+| HTTP Method | Path | Purpose | Guard Used |
+|-------------|------|---------|------------|
+| GET | `/admin/ledger` | List ledger entries with pagination and filters | AdminGuard |
+| GET | `/admin/ledger/export` | Export ledger entries as CSV with PII-minimized columns | AdminGuard |
+
+**Export column allowlist (PII-minimized):**
+
+| Column | Source | Notes |
+|--------|--------|-------|
+| `id` | `entry.id` | Ledger entry identifier |
+| `created_at` | `entry.createdAt` | ISO-8601 timestamp |
+| `type` | `entry.type` | Ledger entry type |
+| `amount` | `entry.amount` | Numeric amount |
+| `currency` | `entry.currency` | Currency code |
+| `status` | `entry.status` | Entry status |
+| `reference` | `entry.reference` | Internal reference (no PII) |
+| `user_ref` | `entry.userId` | Opaque user reference (hashed/ID only, no email/name) |
+
+**Explicitly excluded from export:** raw email, display name, wallet address, IP address, auth tokens, and any other direct PII or secrets. Secrets are redacted in admin log views.
+
+**Export safeguards:**
+- Export range is capped (max range size) to prevent export DoS on large ranges.
+- Heavy ledger queries are paginated/limited.
+- Every export writes an `AuditTrail` entry recording who exported and the requested range.
+
+---
+
+### 4. Users Module
 
 **Base Path**: `/users`  
 **Controller**: `UsersController`  
@@ -56,7 +97,7 @@ The backend uses two primary guards for admin access control:
 
 ---
 
-### 4. Coupons Module
+### 5. Coupons Module
 
 **Base Path**: `/coupons`  
 **Controller**: `CouponsController`  
@@ -72,7 +113,7 @@ The backend uses two primary guards for admin access control:
 
 ---
 
-### 5. Perks Admin Module
+### 6. Perks Admin Module
 
 **Base Path**: `/admin/perks`  
 **Controller**: `PerksAdminController`  
@@ -94,7 +135,7 @@ The backend uses two primary guards for admin access control:
 
 ---
 
-### 6. Waitlist Admin Module
+### 7. Waitlist Admin Module
 
 **Base Path**: `/admin/waitlist`  
 **Controller**: `WaitlistAdminController`  
@@ -109,9 +150,15 @@ The backend uses two primary guards for admin access control:
 | DELETE | `/admin/waitlist/:id` | Soft delete a waitlist entry | AdminGuard |
 | DELETE | `/admin/waitlist/:id/permanent` | Permanently delete a waitlist entry | AdminGuard |
 
+**Bulk Import Limits** (`POST /admin/waitlist/bulk-import`):
+- **Maximum file size**: 10 MB (exceeding returns HTTP 413 Payload Too Large)
+- **Maximum rows**: 10,000 data rows (exceeding returns HTTP 400 Bad Request)
+- Limits are enforced early in the streaming pipeline before database processing to prevent OOM or DoS attacks
+- Error responses include the specific limit exceeded and its configured value
+
 ---
 
-### 7. Chance Module
+### 8. Chance Module
 
 **Base Path**: `/chances`  
 **Controller**: `ChanceController`  
@@ -210,6 +257,8 @@ aborting the batch, so the response may contain fewer items than were requested.
 4. **Admin Action Logging**: Consider logging all admin actions for audit purposes using `AdminLogsService`.
 
 5. **Rate Limiting**: Apply stricter rate limits to admin endpoints to prevent abuse.
+
+6. **PII-Minimized Exports**: Admin CSV exports (e.g. ledger) must use an explicit column allowlist and exclude direct PII and secrets. Export ranges are capped and every export is audited.
 
 ---
 
