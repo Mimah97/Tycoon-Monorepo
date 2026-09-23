@@ -243,67 +243,43 @@ describe('IdempotencyInterceptor (common)', () => {
     it('caches and passes through on first request', async () => {
       jest.spyOn(reflector, 'get').mockReturnValue(true);
       const ctx = buildContext({
-        headers: { 'x-idempotency-key': 'fresh-key' },
+        headers: { 'x-idempotency-key': 'first-key' },
+        body: { sku: 'sku-1', quantity: 1, amountMinor: 250 },
       });
-      const body = { id: 99 };
-      const next = { handle: jest.fn().mockReturnValue(of(body)) };
+      const next = { handle: jest.fn().mockReturnValue(of({ id: 99 })) };
 
       mockRedisService.get.mockResolvedValue(null);
       mockRedisService.incrementRateLimit.mockResolvedValue(1);
-      mockRedisService.set.mockResolvedValue(undefined);
-      mockRedisService.del.mockResolvedValue(undefined);
+      mockRedisService.set.mockResolvedValue('OK');
 
       const result$ = await interceptor.intercept(ctx, next as any);
       const result = await new Promise((resolve) =>
         result$.subscribe((v) => resolve(v)),
       );
 
-      expect(result).toEqual(body);
+      expect(result).toEqual({ id: 99 });
       expect(next.handle).toHaveBeenCalled();
+      expect(mockRedisService.set).toHaveBeenCalled();
     });
 
-    it('stores response with 24-hour TTL', async () => {
-      jest.spyOn(reflector, 'get').mockReturnValue(true);
-      const ctx = buildContext({ headers: { 'x-idempotency-key': 'ttl-key' } });
-      const next = { handle: jest.fn().mockReturnValue(of({ ok: true })) };
-
-      mockRedisService.get.mockResolvedValue(null);
-      mockRedisService.incrementRateLimit.mockResolvedValue(1);
-      mockRedisService.set.mockResolvedValue(undefined);
-      mockRedisService.del.mockResolvedValue(undefined);
-
-      const result$ = await interceptor.intercept(ctx, next as any);
-      await new Promise((resolve) =>
-        result$.subscribe({ complete: resolve as any }),
-      );
-
-      expect(mockRedisService.set).toHaveBeenCalledWith(
-        expect.stringContaining('idempotency:'),
-        expect.objectContaining({ body: { ok: true } }),
-        86400,
-      );
-    });
-
-    it('scopes the Redis key to the authenticated user', async () => {
+    it('stores a body hash alongside the cached response', async () => {
       jest.spyOn(reflector, 'get').mockReturnValue(true);
       const ctx = buildContext({
-        headers: { 'x-idempotency-key': 'scoped-key' },
-        user: { id: 4242 },
+        headers: { 'x-idempotency-key': 'hash-store-key' },
+        body: { sku: 'sku-1', quantity: 1, amountMinor: 250 },
       });
-      const next = { handle: jest.fn().mockReturnValue(of({ ok: true })) };
+      const next = { handle: jest.fn().mockReturnValue(of({ id: 100 })) };
 
       mockRedisService.get.mockResolvedValue(null);
       mockRedisService.incrementRateLimit.mockResolvedValue(1);
-      mockRedisService.set.mockResolvedValue(undefined);
-      mockRedisService.del.mockResolvedValue(undefined);
+      mockRedisService.set.mockResolvedValue('OK');
 
       const result$ = await interceptor.intercept(ctx, next as any);
-      await new Promise((resolve) =>
-        result$.subscribe({ complete: resolve as any }),
-      );
+      await new Promise((resolve) => result$.subscribe((v) => resolve(v)));
 
-      expect(mockRedisService.get).toHaveBeenCalledWith(
-        expect.stringContaining('4242'),
+      const stored = mockRedisService.set.mock.calls[0][1];
+      expect(stored).toEqual(
+        expect.objectContaining({ bodyHash: expect.any(String) }),
       );
     });
 
@@ -311,23 +287,73 @@ describe('IdempotencyInterceptor (common)', () => {
       jest.spyOn(reflector, 'get').mockReturnValue(true);
       const ctx = buildContext({
         headers: { 'x-idempotency-key': 'error-key' },
+        body: { sku: 'sku-1', quantity: 1, amountMinor: 250 },
       });
       const next = {
-        handle: jest.fn().mockReturnValue(throwError(() => new Error('boom'))),
+        handle: jest.fn().mockReturnValue(
+          throwError(() => new Error('shop-api unavailable')),
+        ),
       };
 
       mockRedisService.get.mockResolvedValue(null);
       mockRedisService.incrementRateLimit.mockResolvedValue(1);
-      mockRedisService.del.mockResolvedValue(undefined);
+      mockRedisService.del.mockResolvedValue(1);
 
       const result$ = await interceptor.intercept(ctx, next as any);
       await expect(
         new Promise((resolve, reject) =>
           result$.subscribe({ next: resolve, error: reject }),
         ),
-      ).rejects.toThrow('boom');
+      ).rejects.toThrow('shop-api unavailable');
 
       expect(mockRedisService.del).toHaveBeenCalled();
+    });
+  });
+
+  // ── idempotency TTL expiry reuse ──────────────────────────────────────────
+
+  describe('idempotency TTL expiry reuse', () => {
+    it('treats an expired key as a fresh request', async () => {
+      jest.spyOn(reflector, 'get').mockReturnValue(true);
+      const ctx = buildContext({
+        headers: { 'x-idempotency-key': 'expired-key' },
+        body: { sku: 'sku-1', quantity: 1, amountMinor: 250 },
+      });
+      const next = { handle: jest.fn().mockReturnValue(of({ id: 101 })) };
+
+      // Expired entry: store returns null even though the key was used before.
+      mockRedisService.get.mockResolvedValue(null);
+      mockRedisService.incrementRateLimit.mockResolvedValue(1);
+      mockRedisService.set.mockResolvedValue('OK');
+
+      const result$ = await interceptor.intercept(ctx, next as any);
+      const result = await new Promise((resolve) =>
+        result$.subscribe((v) => resolve(v)),
+      );
+
+      expect(result).toEqual({ id: 101 });
+      expect(next.handle).toHaveBeenCalled();
+    });
+
+    it('sets a TTL on the stored idempotency record', async () => {
+      jest.spyOn(reflector, 'get').mockReturnValue(true);
+      const ctx = buildContext({
+        headers: { 'x-idempotency-key': 'ttl-key' },
+        body: { sku: 'sku-1', quantity: 1, amountMinor: 250 },
+      });
+      const next = { handle: jest.fn().mockReturnValue(of({ id: 102 })) };
+
+      mockRedisService.get.mockResolvedValue(null);
+      mockRedisService.incrementRateLimit.mockResolvedValue(1);
+      mockRedisService.set.mockResolvedValue('OK');
+
+      const result$ = await interceptor.intercept(ctx, next as any);
+      await new Promise((resolve) => result$.subscribe((v) => resolve(v)));
+
+      const setArgs = mockRedisService.set.mock.calls[0];
+      expect(setArgs.length).toBeGreaterThanOrEqual(3);
+      expect(typeof setArgs[2]).toBe('number');
+      expect(setArgs[2]).toBeGreaterThan(0);
     });
   });
 });

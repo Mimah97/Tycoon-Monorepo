@@ -99,6 +99,31 @@ Rules:
 - Idempotency records have a TTL. After expiry, a reused key is treated as a new
   request; clients must not reuse keys across distinct purchases.
 
+### Postgres idempotency store
+
+- shop-api persists idempotency records in Postgres (the authoritative store),
+  keyed by `Idempotency-Key` with the request body hash and the stored response.
+- A record is written in the same transaction as the purchase insert and the
+  inventory adjustment, so a crash cannot leave a purchase without its
+  idempotency record (or vice versa).
+- The store is the source of truth for replay and conflict decisions; the
+  backend does not keep its own idempotency cache for purchase writes.
+
+### Cleanup job
+
+- A scheduled cleanup job removes expired idempotency records so the table does
+  not grow unbounded.
+- The job deletes only records whose TTL has elapsed; unexpired records are
+  never removed, so in-window replays and 409 conflicts keep working.
+- Cleanup runs on a fixed interval and is safe to run concurrently with live
+  traffic (deletes are scoped to expired rows).
+- After a record is cleaned up, a reused key is treated as a new request. This
+  is the same behavior as TTL expiry; clients must not reuse keys across
+  distinct purchases.
+- Monitor cleanup job runs and the idempotency table size; a stalled job is a
+  capacity risk, not a correctness risk (expired rows are still ignored on
+  read).
+
 ## Inventory side-effects
 
 - Inventory is adjusted atomically inside shop-api in the same transaction as
@@ -125,6 +150,7 @@ Rules:
 | `dual_write_blocked_total`| Count of local writes refused by the kill switch.    |
 | `shop_purchase_total`     | Purchase writes, labeled by outcome (success/conflict/error). |
 | `shop_purchase_idempotent_replay_total` | Replays served from a stored idempotent response. |
+| `shop_idempotency_cleanup_deleted_total` | Expired idempotency records removed by the cleanup job. |
 
 ## Failure modes
 
@@ -140,6 +166,8 @@ Rules:
   loser; inventory never goes negative.
 - **Idempotency TTL expiry**: a reused key after expiry is a new request; see
   Idempotency above.
+- **Idempotency cleanup job stalled**: expired rows are still ignored on read,
+  so correctness is unaffected; the table grows until the job recovers.
 - **Canary sticky by userId**: canary routing is sticky per `userId` so a user
   consistently hits the same path.
 - **shop-api down**: with `SHOP_PROXY_WRITES=true`, the request fails closed.

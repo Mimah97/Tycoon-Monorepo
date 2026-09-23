@@ -72,13 +72,31 @@ export class IdempotencyInterceptor implements NestInterceptor {
       return of(body);
     }
 
-    // Handle concurrent requests with the same key using a temporary lock
+    // Handle concurrent requests with the same key using a temporary lock.
+    // The lock is set atomically (SET NX) so only one in-flight request wins;
+    // duplicates fail closed with 409 instead of double-executing the write.
     const lockKey = `${redisKey}:lock`;
-    const acquiredLock = await this.redisService.incrementRateLimit(
+    const acquiredLock = await this.redisService.setIfNotExists(
       lockKey,
-      10,
+      bodyHash,
+      this.LOCK_TTL_SECONDS,
     );
-    if (acquiredLock > 1) {
+    if (!acquiredLock) {
+      // A concurrent request with the same key is still in progress. If it has
+      // already stored a response we can replay it; otherwise fail closed.
+      const inFlight = (await this.redisService.get(
+        redisKey,
+      )) as StoredIdempotentResponse | null;
+      if (inFlight) {
+        if (inFlight.bodyHash && inFlight.bodyHash !== bodyHash) {
+          throw new ConflictException(
+            'Idempotency-Key was reused with a different request payload',
+          );
+        }
+        const response = context.switchToHttp().getResponse();
+        response.status(inFlight.statusCode);
+        return of(inFlight.body);
+      }
       throw new ConflictException(
         'A request with this idempotency key is already in progress',
       );
@@ -93,12 +111,15 @@ export class IdempotencyInterceptor implements NestInterceptor {
         await this.redisService.set(
           redisKey,
           { statusCode, body, bodyHash },
-          24 * 60 * 60,
+          this.RESPONSE_TTL_SECONDS,
         );
         await this.redisService.del(lockKey);
       }),
     );
   }
+
+  private readonly RESPONSE_TTL_SECONDS = 24 * 60 * 60;
+  private readonly LOCK_TTL_SECONDS = 30;
 
   private hashBody(body: unknown): string {
     const serialized = this.stableStringify(body ?? null);
