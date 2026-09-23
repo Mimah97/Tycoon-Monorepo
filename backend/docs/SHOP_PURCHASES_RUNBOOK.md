@@ -54,6 +54,24 @@ remains authoritative for any writes it already accepted.
 - A circuit breaker opens after repeated failures and fails closed for writes
   while `SHOP_PROXY_WRITES=true`.
 
+## Service authentication and API-key rotation
+
+- Service-to-service calls to shop-api authenticate with an API key only. No
+  user bearer token is ever forwarded to shop-api; the backend translates
+  identity per ADR-003 and presents its own service credential.
+- The API key is read from configuration/secret storage at call time. It is
+  never hard-coded, committed, or logged.
+- **Rotation**: shop-api accepts the current key and the previous key during a
+  rotation window so the backend can roll without downtime. Rotate by issuing a
+  new key, deploying it to the backend, then retiring the old key after the
+  window closes.
+- If shop-api rejects the key (`401`/`403`), the backend fails closed for
+  writes and surfaces the error with the `requestId`; it does not retry with a
+  stale key or fall back to a local write.
+- Monitor auth failures from the proxy (`shop_proxy_errors` labeled by cause);
+  a spike right after a rotation usually means the new key was not deployed
+  everywhere.
+
 ## Identity translation (ADR-003)
 
 - Backend `userId` strings are translated to shop-api users via the identity
@@ -140,6 +158,23 @@ Rules:
   duplicate key instead of creating a second purchase.
 - `X-Request-Id` is propagated end-to-end and included in error responses and
   logs for tracing.
+- The backend generates a `requestId` when the client does not supply one and
+  forwards it to shop-api on every proxy call. shop-api echoes it back and
+  includes it in its own error responses, so a single id traces the request
+  across both services.
+- Error responses follow `docs/API_ERROR_RESPONSE_STANDARDS.md` and always
+  carry the `requestId` so operators can correlate a client report with logs.
+
+## Logging and redaction
+
+- Never log secrets: API keys, bearer tokens, `Authorization` headers, and
+  `Idempotency-Key` values are redacted before they reach any log sink.
+- Redaction is applied centrally (logger/interceptor level) so new call sites
+  inherit it; do not log raw request headers ad hoc.
+- Avoid PII in telemetry. Metric labels use bounded, non-identifying values
+  (outcome, cause, status code) — never user ids, emails, SKUs, or raw URLs.
+- `requestId` is safe to log and is the preferred correlation field; it is not
+  a secret and carries no PII.
 
 ## Metrics
 
@@ -158,31 +193,6 @@ Rules:
   existing purchase is returned.
 - **shop-api 409 conflict**: same key, different body hash; surfaced as a
   conflict and the original purchase is left untouched.
-- **Timeout after client retry**: surfaced as an error with `requestId`; the
-  write is not retried locally.
-- **Amount unit mismatch**: rejected by shop-api validation; the backend does
-  not coerce client amounts.
-- **Concurrent checkout, same SKU**: atomic inventory adjustment rejects the
-  loser; inventory never goes negative.
-- **Idempotency TTL expiry**: a reused key after expiry is a new request; see
-  Idempotency above.
-- **Idempotency cleanup job stalled**: expired rows are still ignored on read,
-  so correctness is unaffected; the table grows until the job recovers.
-- **Canary sticky by userId**: canary routing is sticky per `userId` so a user
-  consistently hits the same path.
-- **shop-api down**: with `SHOP_PROXY_WRITES=true`, the request fails closed.
-
-## Security
-
-- The backend ↔ shop-api API key is server-side only and never exposed to
-  clients.
-- Client-supplied prices are never trusted as final.
-- Writes fail closed when the flag is on and shop-api is unavailable.
-- Admin catalog mutations are audited; new admin/WS surfaces are deny-by-default.
-
-## Rollback notes
-
-1. Set `SHOP_PROXY_WRITES=false`.
-2. Restart/redeploy the backend to pick up the flag.
-3. Confirm `dual_write_blocked_total` stops increasing and legacy writes resume.
-4. Investigate shop-api health before re-enabling the proxy.
+- **shop-api 401/403 (bad or rotated key)**: fail closed for writes; surfaced
+  with the `requestId`. Check that the current API key is deployed everywhere.
+- **Timeout after client retry**: surfaced as
